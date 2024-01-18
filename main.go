@@ -41,7 +41,7 @@ func ListOUIs() []*OUIData {
 
 func GetOUI(oui string) *OUIData {
 	for _, o := range allOUIs {
-		if o.OUI == oui {
+		if o.OUI == strings.ToUpper(oui) {
 			return o
 		}
 	}
@@ -80,6 +80,48 @@ func makeMACHashMap(fileName string) map[string]*OUIData {
 	return results
 }
 
+func normalizeMac(mac string) (string, error) {
+	r := regexp.MustCompile("[^a-zA-Z0-9 ]+")
+	mac = r.ReplaceAllString(mac, "")
+
+	if len(mac) != 12 {
+		return "", errors.New("Incorrect format of MAC address")
+	}
+
+	return mac, nil
+}
+
+func GetVendorFromMAC(mac string) string {
+	// Normalize MAC and then check first 6 characters
+	macToFind, err := normalizeMac(mac)
+	if err != nil {
+		log.Printf("Unable to find MAC %v", mac)
+		return ""
+	}
+	macOUI := GetOUI(macToFind[:6])
+	if macOUI != nil {
+		return macOUI.VendorName
+	}
+
+	return ""
+}
+
+type MACHandler struct {
+}
+
+func (m MACHandler) GetOUIFromMAC(w http.ResponseWriter, r *http.Request) {
+	macParam := chi.URLParam(r, "mac")
+	vendor  := GetVendorFromMAC(macParam)
+	if vendor == "" {
+		http.Error(w, "Unable to find OUI Vendor for this MAC address", http.StatusNotFound)
+	}
+	err := json.NewEncoder(w).Encode(vendor)
+	if err != nil {
+		http.Error(w, "Internal Error", http.StatusInternalServerError)
+		return
+	}
+}
+
 type OUIHandler struct {
 }
 
@@ -112,6 +154,13 @@ func ouiRoutes() chi.Router {
 	return r
 }
 
+func macRoutes() chi.Router {
+	r := chi.NewRouter()
+	macHandler := MACHandler{}
+	r.Get("/{mac}", macHandler.GetOUIFromMAC)
+	return r
+}
+
 func main() {
 	// Load MAC data
 	makeMACHashMap("oui.txt")
@@ -122,5 +171,7 @@ func main() {
 		w.Write([]byte("app is ok!"))
 	})
 	r.Mount("/oui", ouiRoutes())
+	r.Mount("/mac", macRoutes())
+	log.Println("Starting web server...")
 	http.ListenAndServe(":3000", r)
 }
